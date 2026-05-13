@@ -1,7 +1,3 @@
-Chào Đạt, dưới đây là nội dung file **README.md** đã được mình "thay máu" hoàn toàn để phù hợp với trang Simplify thay vì Indeed, bám sát các tính năng hiện tại như Infinite Scroll và gửi dữ liệu lên Google Sheets.
-
----
-
 # Simplify Job Crawler Chrome Extension
 
 Một Chrome Extension chuyên dụng giúp tự động thu thập dữ liệu việc làm từ trang [Simplify.jobs](https://simplify.jobs/) bằng cơ chế cuộn thông minh và hỗ trợ xuất dữ liệu đa nền tảng.
