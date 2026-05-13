@@ -1,82 +1,75 @@
-# Indeed Job Crawler Chrome Extension
-
-Một Chrome Extension đơn giản giúp tự động thu thập dữ liệu việc làm từ trang [Indeed.com](https://www.indeed.com/) và xuất kết quả ra file CSV.
-
-## 🧹 Tính năng
-
-* ✅ Tự động crawl nhiều trang kết quả tìm kiếm việc làm.
-* ✅ Hiển thị dữ liệu trực tiếp trên giao diện trang web Indeed.
-* ✅ Crawl đầy đủ thông tin: Tên công ty, tiêu đề công việc, mức lương, địa điểm, liên kết, trang số.
-* ✅ Hỗ trợ tiếp tục crawl sau khi reload trang.
-* ✅ Giới hạn số trang crawl (do người dùng nhập).
-* ✅ Xuất file CSV với tên: `số-job_jobs_tên-trang.csv`.
-* ✅ Nút "Xóa Dữ Liệu" để reset lại từ đầu.
+Chào Đạt, dưới đây là nội dung file **README.md** đã được mình "thay máu" hoàn toàn để phù hợp với trang Simplify thay vì Indeed, bám sát các tính năng hiện tại như Infinite Scroll và gửi dữ liệu lên Google Sheets.
 
 ---
 
-## 🔧 Cài đặt
+# Simplify Job Crawler Chrome Extension
 
-1. **Tải mã nguồn**
-   * Clone hoặc tải ZIP source code về máy.
-2. **Tải extension vào Chrome:**
-   * Truy cập `chrome://extensions/` trên trình duyệt.
-   * Bật **Chế độ dành cho nhà phát triển** (Developer Mode).
-   * Bấm **Tải tiện ích đã giải nén** (Load unpacked).
-   * Chọn thư mục chứa các file:
-     ```
-     ┌── manifest.json
-     ├── background.js
-     ├── content.js
-     └── (tùy chọn) styles.css
-     ```
+Một Chrome Extension chuyên dụng giúp tự động thu thập dữ liệu việc làm từ trang [Simplify.jobs](https://simplify.jobs/) bằng cơ chế cuộn thông minh và hỗ trợ xuất dữ liệu đa nền tảng.
+
+## 🧹 Tính năng nổi bật
+
+* **Tự động cuộn (Infinite Scroll):** Tự động cuộn trang để kích hoạt tải thêm công việc mới từ API của Simplify.
+* **Giao diện trực quan:** Bảng điều khiển (Panel) hiển thị ngay trên trang web giúp theo dõi trạng thái thu thập thời gian thực.
+* **Dữ liệu chi tiết:** Thu thập đầy đủ các trường thông tin: Tên công ty, Tiêu đề công việc, Mức lương ( Salary), Địa điểm (Location) và Liên kết ứng tuyển trực tiếp.
+* **Đồng bộ Google Sheets:** Tự động gửi dữ liệu về Google Sheets thông qua Google Apps Script ngay sau khi hoàn tất.
+* **Xuất file CSV:** Hỗ trợ tải file CSV cục bộ để lưu trữ và xử lý offline.
+* **Chống trùng lặp:** Cơ chế kiểm tra dựa trên Title và Company để đảm bảo không lưu trùng dữ liệu khi cuộn nhiều lần.
 
 ---
 
-## 🚀 Hướng dẫn sử dụng
+## 🔧 Cài đặt nhanh
 
-1. Truy cập [Indeed](https://www.indeed.com/) và tìm kiếm từ khóa công việc mong muốn.
-2. Giao diện "Indeed Crawler" sẽ hiển thị ở phía dưới trang.
-3. Chỉnh **số trang tối đa** nếu muốn (ví dụ: 3, 5, 10...).
-4. Bấm nút **"Bắt đầu thu thập"** để bắt đầu quá trình crawl.
-5. Extension sẽ tự động:
-   * Click từng job card → lấy thông tin chi tiết.
-   * Chuyển sang trang tiếp theo.
-   * Dừng khi hết trang hoặc đạt giới hạn.
-6. Khi hoàn tất, trình duyệt sẽ hiển thị cửa sổ  **lưu file CSV** .
-7. Bạn có thể dùng nút **"Xóa Dữ Liệu"** để reset toàn bộ.
+1. **Tải mã nguồn:** Tải toàn bộ source code về máy tính của bạn.
+2. **Nạp vào Chrome:**
+* Mở trình duyệt và truy cập `chrome://extensions/`.
+* Bật chế độ **Developer Mode** (Chế độ dành cho nhà phát triển).
+* Chọn **Load unpacked** (Tải tiện ích đã giải nén) và trỏ đến thư mục chứa project.
+
+
+3. **Cấu hình Apps Script:** Dán URL Web App của bạn vào hằng số `url` trong file `content.js` để tính năng lưu vào Sheets hoạt động.
 
 ---
 
-## 📂 Dữ liệu thu thập
+## 🚀 Cách sử dụng
 
-Mỗi dòng trong file CSV sẽ bao gồm:
+1. Truy cập vào mục [Simplify Jobs](https://simplify.jobs/jobs) và thực hiện tìm kiếm công việc.
+2. Bảng điều khiển **Simplify Crawler** sẽ tự động xuất hiện ở góc dưới bên phải màn hình.
+3. **Thiết lập:** Nhập "Số lần cuộn tối đa" (mỗi lần cuộn tương ứng với việc load thêm một lượng job mới).
+4. **Bắt đầu:** Nhấn **"Bắt đầu thu thập"**. Extension sẽ tự động thực hiện việc quét dữ liệu và cuộn trang liên tục.
+5. **Kết thúc:**
+* Quá trình sẽ dừng khi đạt giới hạn lần cuộn hoặc hết dữ liệu trên trang.
+* Bạn có thể nhấn **"Dừng & Xuất File"** bất cứ lúc nào để kết thúc sớm.
 
-| Company Name | Job Title | Link | Salary | Location | Page |
-| ------------ | --------- | ---- | ------ | -------- | ---- |
 
----
-
-## ⚠️ Lưu ý
-
-* Extension chỉ hoạt động với giao diện trang kết quả tìm kiếm trên Indeed.
-* Khi chuyển sang mỗi trang mới, trình duyệt sẽ reload lại toàn bộ — nhưng extension sẽ tự động tiếp tục crawl nếu trước đó chưa hoàn thành.
-* Không cần phải nhấn lại nút "Bắt đầu" sau mỗi trang.
-* Nếu bạn không thấy giao diện hiện ra, hãy đảm bảo đã mở trang Indeed đúng định dạng kết quả tìm kiếm (ví dụ: `https://www.indeed.com/jobs?q=developer&l=...`).
+6. **Xử lý dữ liệu:** Sau khi hoàn tất, file CSV sẽ tự động được tải về và dữ liệu sẽ được đẩy lên Google Sheets đã cấu hình.
 
 ---
 
-## 📃 Cấu trúc file
+## 📂 Cấu trúc dữ liệu CSV/Sheets
 
-```
+Dữ liệu thu thập được sắp xếp theo định dạng:
+
+| Company | Job Title | Salary | Location | Link |
+| --- | --- | --- | --- | --- |
+| Tên công ty | Tên vị trí tuyển dụng | Mức lương (nếu có) | Địa điểm làm việc | Link ứng tuyển |
+
+---
+
+## 📃 Cấu trúc thư mục
+
+```text
 .
-├── manifest.json        # Cấu hình extension
-├── background.js        # Xử lý tải file CSV
-├── content.js           # Logic chính cho crawl + giao diện
-└── styles.css           # (tùy chọn) style CSS
+├── manifest.json   # Cấu hình quyền và tên miền simplify.jobs
+├── background.js   # Xử lý download file và fetch dữ liệu ngầm
+├── content.js      # Logic bóc tách DOM và quản lý UI Panel
+├── styles.css      # Định dạng giao diện cho bảng điều khiển
+└── icon.png        # Biểu tượng của extension
+
 ```
 
 ---
 
-## 📃 Giấy phép
+## ⚠️ Lưu ý bảo mật
 
-Dự án này dùng cho mục đích học tập và cá nhân. Không nên sử dụng để crawl dữ liệu với mục đích thương mại nếu không được sự cho phép từ Indeed.
+* Extension này được phát triển cho mục đích học tập và nghiên cứu cá nhân (Software Engineering student).
+* Vui lòng tuân thủ điều khoản sử dụng của Simplify.jobs khi thực hiện thu thập dữ liệu tự động.
