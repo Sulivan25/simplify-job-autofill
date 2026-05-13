@@ -3,7 +3,7 @@
   "name": "Simplify Job Crawler",
   "version": "1.1",
   "description": "Tự động thu thập dữ liệu việc làm từ Simplify.",
-  "permissions": ["scripting", "tabs", "downloads", "storage"],
+  "permissions": ["scripting", "tabs", "downloads", "storage", "clipboardRead"],
   "action": {
     "default_title": "Simplify Job Crawler",
     "default_icon": "icon.png"

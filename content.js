@@ -139,7 +139,36 @@ async function crawlLoop() {
     finishCrawl("Hoàn thành quét dữ liệu.");
 }
 
+async function getShareLink(urlBefore) {
+    // Ưu tiên 1: URL browser thay đổi sau khi click card (SPA navigation)
+    if (window.location.href !== urlBefore) {
+        return window.location.href;
+    }
+
+    // Ưu tiên 2: Click nút share và đọc clipboard
+    const shareBtn =
+        document.querySelector('button[aria-label*="share" i]') ||
+        document.querySelector('button[aria-label*="copy link" i]') ||
+        document.querySelector('button[title*="share" i]') ||
+        document.querySelector('[data-testid*="share"]');
+
+    if (shareBtn) {
+        shareBtn.click();
+        await wait(600);
+        try {
+            const clipText = await navigator.clipboard.readText();
+            if (clipText && clipText.startsWith('http')) return clipText.trim();
+        } catch (e) {
+            log("Không đọc được clipboard:", e.message);
+        }
+    }
+
+    return window.location.href;
+}
+
 async function scrapeCurrentJobs(scrollNumber) {
+    if (scrollNumber === 1) await wait(800); // Đợi DOM ổn định ở lần đầu
+
     const jobCards = document.querySelectorAll('div.group.mx-auto.flex.size-full.flex-col');
     const keyword = document.title.split('|')[0].trim();
 
@@ -147,13 +176,19 @@ async function scrapeCurrentJobs(scrollNumber) {
         if (!isCrawling) break;
 
         try {
-            const titleEl = card.querySelector('div.mt-2 h3');
-            const companyEl = card.querySelector('div.text-secondary-300 span.text-left');
-            const linkEl = card.closest('a');
-            
+            // Thử nhiều selector để xử lý cả trạng thái active/inactive của card
+            const titleEl = card.querySelector('h3') || card.querySelector('h2') || card.querySelector('h4');
+            const companyEl = card.querySelector('span.text-left') ||
+                              card.querySelector('[class*="company"]') ||
+                              card.querySelector('div.text-secondary-300 span');
+
             const jobTitle = titleEl ? titleEl.innerText.trim() : "N/A";
             const jobCompany = companyEl ? companyEl.innerText.trim() : "N/A";
-            const jobKey = `${jobTitle}-${jobCompany}`; // Tạo key duy nhất vì Simplify không có jk-id lộ thiên
+
+            // Bỏ qua nếu cả hai đều N/A (element không phải job card thực sự)
+            if (jobTitle === "N/A" && jobCompany === "N/A") continue;
+
+            const jobKey = `${jobTitle}-${jobCompany}`;
 
             if (existingKeys.has(jobKey)) continue;
 
@@ -167,23 +202,30 @@ async function scrapeCurrentJobs(scrollNumber) {
                 else if (badge.querySelector('p.text-left')) location = text;
             });
 
+            // Click card để mở detail panel bên phải
+            const urlBefore = window.location.href;
+            card.click();
+            await wait(1500); // Đợi detail panel load
+
+            const jobLink = await getShareLink(urlBefore);
+
             const job = {
                 key: jobKey,
                 title: jobTitle,
                 company: jobCompany,
-                location: location,
-                salary: salary,
-                link: linkEl ? linkEl.href : window.location.href,
+                location,
+                salary,
+                link: jobLink,
                 page: scrollNumber,
-                keyword: keyword
+                keyword
             };
 
             allJobs.push(job);
             existingKeys.add(jobKey);
             appendToTable(job);
             chrome.storage.local.set({ allJobs });
-            
-            await wait(100); // Tránh treo UI
+
+            await randomDelay(800, 1500);
         } catch (e) {
             console.error("Lỗi thẻ job:", e);
         }
