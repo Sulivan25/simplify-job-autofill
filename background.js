@@ -1,7 +1,7 @@
 // background.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "saveToCSV" && message.url) {
-    const filename = message.filename || "indeed_jobs.csv"; // dùng tên gửi từ content.js nếu có
+    const filename = message.filename || "simplify_jobs.csv"; // dùng tên gửi từ content.js nếu có
     chrome.downloads.download({
       url: message.url,
       filename: filename,

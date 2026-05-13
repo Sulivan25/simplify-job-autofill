@@ -1,5 +1,5 @@
 ======== ELEMENT BUTTON APPLY NOW
-<button id="indeedApplyButton" data-testid="indeedApplyButton-test" title="" aria-label="Apply now opens in a new tab" class="serp-page-a75pkb e8ju0x50"><div class="jobsearch-IndeedApplyButton-contentWrapper"><span class="jobsearch-IndeedApplyButton-newDesign css-1ebo7dz eu4oa1w0">Apply now</span></div></button>
+<button id="indeedApplyButton" data-testid="simplifyApplyButton-test" title="" aria-label="Apply now opens in a new tab" class="serp-page-a75pkb e8ju0x50"><div class="jobsearch-IndeedApplyButton-contentWrapper"><span class="jobsearch-IndeedApplyButton-newDesign css-1ebo7dz eu4oa1w0">Apply now</span></div></button>
 
 
 ======== ELEMENT BUTTON COMPANY SITE APPLY
