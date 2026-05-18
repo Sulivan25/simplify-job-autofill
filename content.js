@@ -48,7 +48,7 @@ function createPanel() {
       <table id="indeed-crawler-table">
         <thead>
           <tr>
-            <th>Company</th><th>Job Title</th><th>Link</th><th>Salary</th><th>Location</th><th>Scroll</th><th>Keyword</th>
+            <th>Company</th><th>Job Title</th><th>Link</th><th>Salary</th><th>Posted Date</th><th>Location</th><th>Scroll</th><th>Keyword</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -96,6 +96,7 @@ function appendToTable(job) {
     <td>${job.title}</td>
     <td><a href="${job.link}" target="_blank">Link</a></td>
     <td>${job.salary}</td>
+    <td>${job.postedDate}
     <td>${job.location}</td>
     <td>${job.page}</td>
     <td>${job.keyword}</td>
@@ -107,11 +108,45 @@ function appendToTable(job) {
 // --- CRAWL LOGIC CHO SIMPLIFY (INFINITE SCROLL) ---
 async function startCrawl() {
     if (isCrawling) return;
+
+    const inputVal = document.getElementById("max-pages-input").value;
+    maxPages = parseInt(inputVal) || 1;
+
     isCrawling = true;
     chrome.storage.local.set({ isCrawling, maxPages });
     document.getElementById("indeed-start-btn").disabled = true;
     updateStatus("Bắt đầu cuộn trang và quét dữ liệu...");
     await crawlLoop();
+}
+
+function getJobListContainer() {
+    return [...document.querySelectorAll('div')].find(el =>
+        el.classList.contains('overflow-y-auto') &&
+        el.classList.contains('gap-4') &&
+        el.scrollHeight > el.clientHeight
+    ) || null;
+}
+
+async function wheelScroll(container, times = 22) {
+    const cardHeight = document.querySelector('div.group.mx-auto.flex.size-full.flex-col')?.offsetHeight || 120;
+    const rect = container.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+
+    container.dispatchEvent(new MouseEvent('mousemove', { clientX, clientY, bubbles: true }));
+    await wait(100);
+
+    for (let i = 0; i < times; i++) {
+        container.dispatchEvent(new WheelEvent('wheel', {
+            deltaY: cardHeight,
+            deltaMode: 0,
+            clientX,
+            clientY,
+            bubbles: true,
+            cancelable: true
+        }));
+        await wait(80);
+    }
 }
 
 async function crawlLoop() {
@@ -120,20 +155,31 @@ async function crawlLoop() {
 
     while (isCrawling && currentScroll < maxPages) {
         updateStatus(`Đang quét dữ liệu lần cuộn thứ ${currentScroll + 1}...`);
-        
-        // Quét các job hiện có trên màn hình
+
         await scrapeCurrentJobs(currentScroll + 1);
 
-        // Cuộn xuống để load thêm
-        window.scrollTo(0, document.body.scrollHeight);
-        await wait(3000); // Đợi Simplify load API
-
-        let newHeight = document.body.scrollHeight;
-        if (newHeight === lastHeight) {
-            log("Đã chạm đáy trang.");
+        const container = getJobListContainer();
+        if (!container) {
+            log("Không tìm thấy job list container, dừng lại.");
             break;
         }
-        lastHeight = newHeight;
+
+        await wheelScroll(container, 22);
+        await wait(4000); // Đợi Simplify gọi API và render card mới
+
+        const newHeight = container.scrollHeight;
+        if (newHeight === lastHeight) {
+            log("Đã chạm đáy — thử kích lại.");
+            container.scrollTop -= 300;
+            await wait(1000);
+            await wheelScroll(container, 22);
+            await wait(10000);
+            container.scrollTop = container.scrollHeight;
+            await wait(10000);
+            if (container.scrollHeight === lastHeight) break;
+            await scrapeCurrentJobs(currentScroll + 1); // Có job mới sau retry → quét lại
+        }
+        lastHeight = container.scrollHeight;
         currentScroll++;
     }
     finishCrawl("Hoàn thành quét dữ liệu.");
@@ -166,6 +212,70 @@ async function getShareLink(urlBefore) {
     return window.location.href;
 }
 
+    /**
+     * Hàm tìm ngày đăng dựa trên class cụ thể đã xác định
+     * @param {Element} card - Thẻ job card hiện tại
+     * @returns {string} - Ngày đăng hoặc "N/A"
+     */
+    async function getPostedDate() {
+    const detailPanel = document.querySelector('div.flex.flex-col.gap-4.lg\\:w-1\\/2.xl\\:w-2\\/5');
+    if (!detailPanel) return "N/A";
+
+    // 1. Tìm phần tử trigger (thẻ span chứa chữ "Confirmed live...")
+    const triggerSpan = detailPanel.querySelector('span.cursor-help');
+
+    if (triggerSpan) {
+        // 2. Mô phỏng di chuột vào để kích hoạt tooltip
+        triggerSpan.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        triggerSpan.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+        // 3. Đợi một chút để Radix UI đổi data-state và hiển thị tooltip
+        await wait(600); 
+
+        // 4. Tìm Tooltip Content - Thường Radix sẽ render ở cuối body hoặc gần đó
+        // Chúng ta tìm theo nội dung "Posted on" như trong hình bạn gửi
+        const portalNodes = document.querySelectorAll('[role="tooltip"], [data-side]');
+        for (let node of portalNodes) {
+            if (node.innerText.includes("Posted on")) {
+                const dateMatch = node.innerText.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
+                const result = dateMatch ? dateMatch[0] : "N/A";
+                
+                // Di chuột ra để dọn dẹp trạng thái UI (optional)
+                triggerSpan.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+                
+                return result;
+            }
+        }
+    }
+
+    // Trường hợp dự phòng: Nếu ngày hiện sẵn không cần hover
+    const pEl = detailPanel.querySelector('div.pb-2 p.mt-1.text-left.text-sm.text-gray-500');
+    if (pEl && pEl.innerText.trim() !== "") {
+        const dateMatch = pEl.innerText.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
+        if (dateMatch) return dateMatch[0];
+    }
+
+    return "N/A";
+}
+
+    function forceOpenDateTooltip() {
+    // Tìm phần tử trigger có chứa data-state trong detail panel
+    const element = document.querySelector('div[aria-describedby*="radix"]');
+        if (element && element.getAttribute('data-state') === 'closed') {
+            element.setAttribute('data-state', 'open');
+            
+            // Dùng MutationObserver để giữ trạng thái luôn mở trong lúc cào
+            const observer = new MutationObserver(() => {
+                if (element.getAttribute('data-state') == 'closed') {
+                    element.setAttribute('data-state', 'delayed-open');
+                }
+            });
+            observer.observe(element, { attributes: true });
+            return observer;
+        }
+        return null;
+    }
+
 async function scrapeCurrentJobs(scrollNumber) {
     if (scrollNumber === 1) await wait(800); // Đợi DOM ổn định ở lần đầu
 
@@ -184,6 +294,9 @@ async function scrapeCurrentJobs(scrollNumber) {
 
             const jobTitle = titleEl ? titleEl.innerText.trim() : "N/A";
             const jobCompany = companyEl ? companyEl.innerText.trim() : "N/A";
+            
+            await wait(2000)
+            
 
             // Bỏ qua nếu cả hai đều N/A (element không phải job card thực sự)
             if (jobTitle === "N/A" && jobCompany === "N/A") continue;
@@ -204,9 +317,23 @@ async function scrapeCurrentJobs(scrollNumber) {
 
             // Click card để mở detail panel bên phải
             const urlBefore = window.location.href;
+            
             card.click();
-            await wait(1500); // Đợi detail panel load
+            await wait(2000); // Đợi detail panel load
 
+            // --- LOGIC MỚI CHO NGÀY BỊ GIẤU ---
+            // 1. Ép trạng thái Tooltip sang 'open' bằng MutationObserver
+            const observer = forceOpenDateTooltip();
+            
+            // 2. Đợi một chút để Portal/Tooltip kịp render nội dung vào DOM
+            await wait(1000); 
+
+            // 3. Lấy ngày đăng (Hàm getPostedDate lúc này sẽ tìm thấy data-state="open")
+            const postedDate = await getPostedDate();
+
+            // 4. Dọn dẹp: Ngắt observer để trả lại trạng thái tự nhiên cho UI
+            if (observer) observer.disconnect();
+            
             const jobLink = await getShareLink(urlBefore);
 
             const job = {
@@ -215,6 +342,7 @@ async function scrapeCurrentJobs(scrollNumber) {
                 company: jobCompany,
                 location,
                 salary,
+                postedDate: postedDate,
                 link: jobLink,
                 page: scrollNumber,
                 keyword
@@ -225,7 +353,7 @@ async function scrapeCurrentJobs(scrollNumber) {
             appendToTable(job);
             chrome.storage.local.set({ allJobs });
 
-            await randomDelay(800, 1500);
+            await randomDelay(1000, 1500);
         } catch (e) {
             console.error("Lỗi thẻ job:", e);
         }
@@ -250,9 +378,9 @@ async function finishCrawl(reason) {
 }
 
 function exportCSV() {
-    const headers = ["Company", "Title", "Link", "Salary", "Location", "Scroll_Step"];
+    const headers = ["Company", "Title", "Link", "Salary", "Posted_Date", "Location", "Scroll_Step"];
     const rows = allJobs.map(j => 
-        [j.company, j.title, j.link, j.salary, j.location, j.page].map(v => `"${(v||"").toString().replace(/"/g, '""')}"`).join(",")
+        [j.company, j.title, j.link, j.salary, j.postedDate, j.location, j.page].map(v => `"${(v||"").toString().replace(/"/g, '""')}"`).join(",")
     );
     const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
