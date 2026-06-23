@@ -1,0 +1,12 @@
+- generic [ref=e1]:
+  - img [ref=e4]
+  - alert [ref=e8]
+  - dialog "We value your privacy" [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]: We value your privacy
+      - generic [ref=e13]: This site uses cookies to improve your browsing experience, analyze site traffic, and show personalized content.
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - button "Reject All" [active] [ref=e16] [cursor=pointer]
+        - button "Accept All" [ref=e17] [cursor=pointer]
+      - button "Customize" [ref=e18] [cursor=pointer]

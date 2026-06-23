@@ -62,3 +62,75 @@
 #indeed-crawler-table th {
   background: #f0f0f0;
 }
+
+/* --- AI Settings Section --- */
+#sac-ai-settings {
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  padding: 6px 8px;
+}
+
+#sac-ai-toggle {
+  color: #60a5fa;
+  font-weight: bold;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+#sac-ai-toggle:hover { color: #93c5fd; }
+
+#sac-ai-body {
+  display: none;
+  margin-top: 6px;
+}
+
+#sac-ai-body label {
+  display: block;
+  color: #cbd5e1;
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+
+#sac-ai-body select,
+#sac-ai-body input[type="password"],
+#sac-ai-body textarea {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: #1e293b;
+  background: #f8fafc;
+  border: 1px solid #475569;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+#sac-ai-body textarea {
+  resize: vertical;
+}
+
+#sac-ai-body input[type="password"]:focus,
+#sac-ai-body textarea:focus,
+#sac-ai-body select:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}
+
+#sac-ai-save {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: bold;
+  cursor: pointer;
+}
+#sac-ai-save:hover { background: #2563eb; }
+
+#sac-ai-save-status {
+  color: #86efac;
+  font-size: 11px;
+}

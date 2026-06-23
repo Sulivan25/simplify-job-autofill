@@ -1,0 +1,8 @@
+[    1758ms] [LOG] [Featurebase SDK] Initializing SDK! @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4
+[    2646ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://api.simplify.jobs/v2/auth/validate:0
+[    4185ms] [WARNING] [Simplify]: Sabre message timed out @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4
+[    4185ms] [WARNING] [Simplify]: Sabre message timed out @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4
+[    4672ms] [WARNING] Request #1781709703383: Request to Node nearestNode failed due to "ECONNABORTED timeout of 2000ms exceeded" @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4
+[    4672ms] [WARNING] Request #1781709703383: Sleeping for 1s and then retrying request... @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4
+[    4674ms] [WARNING] Request #1781709703388: Request to Node nearestNode failed due to "ECONNABORTED timeout of 2000ms exceeded" @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4
+[    4674ms] [WARNING] Request #1781709703388: Sleeping for 1s and then retrying request... @ https://simplify.jobs/_dunder/_next/static/chunks/pages/_app-797d7a3780ca4e37.js:4

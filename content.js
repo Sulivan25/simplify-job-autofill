@@ -1,124 +1,634 @@
-// content.js - Tối ưu cho Simplify.jobs dựa trên khung logic Indeed
+// content.js - Kịch bản Tự Động Kích Hoạt & Auto Apply Hỗn Hợp cho Simplify.jobs
 let isCrawling = false;
-let allJobs = [];
-let maxPages = 1; // Ở Simplify, 1 "trang" tương ứng với 1 lần cuộn (load thêm job)
-let hasExported = false;
+let maxPages = 1;
 
-const url = "https://script.google.com/macros/s/AKfycbwZyM19-hv2Z9Fz1z4lgnaOftjC4mDsCQrsD9IxTI3ChnjUBmoReELMOhQ8dIqsOHiY/exec";
-let existingKeys = new Set();
+// --- DEDUPLICATION: dùng Set + sessionStorage để survive DOM re-render ---
+// (allJobsApplied array cũ bị mất khi SPA thay thế DOM nodes)
+function getProcessedSet() {
+    try {
+        return new Set(JSON.parse(sessionStorage.getItem('_sac_processed') || '[]'));
+    } catch { return new Set(); }
+}
+function markProcessed(jobId) {
+    const s = getProcessedSet();
+    s.add(jobId);
+    try { sessionStorage.setItem('_sac_processed', JSON.stringify([...s])); } catch {}
+}
+function isProcessed(jobId) {
+    return getProcessedSet().has(jobId);
+}
 
 // --- HELPERS ---
 function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function randomDelay(min = 1200, max = 3500) {
+function randomDelay(min = 1500, max = 3000) {
     return new Promise(resolve => setTimeout(resolve, min + Math.random() * (max - min)));
 }
-function log(...args) { console.log("[Simplify Crawler]", ...args); }
-
-// --- GOOGLE SHEETS LOGIC ---
-async function sendToGoogleSheets(jobs) {
-    const sheetName = "Simplify_Crawl_" + new Date().toLocaleDateString().replace(/\//g, '-');
-    const payload = { sheetName, jobs };
-
-    return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ action: "saveToSheets", url, payload }, response => {
-            if (response && response.success) resolve(response.data);
-            else reject(new Error(response?.error || "Unknown error"));
-        });
-    });
-}
+function log(...args) { console.log("[Simplify Auto-Apply]", ...args); }
 
 // --- UI PANEL ---
 function createPanel() {
     if (document.querySelector("#indeed-crawler-panel")) return;
 
     const panel = document.createElement("div");
-    panel.id = "indeed-crawler-panel"; // Giữ ID cũ để khớp với styles.css của bạn
+    panel.id = "indeed-crawler-panel";
     panel.innerHTML = `
     <div id="indeed-crawler-controls">
-      <button id="indeed-start-btn">Bắt Đầu Thu Thập</button>
-      <button id="indeed-stop-btn">Tạm Dừng & Xuất File</button>
-      <button id="indeed-reset-btn">Xóa Dữ Liệu</button>
-      <label style="margin-left: 10px;">
-        Số lần cuộn tối đa:
-        <input type="number" id="max-pages-input" value="${maxPages}" min="1" style="width: 50px;"/>
+      <button id="indeed-start-btn" style="background-color: #22c55e; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer;">Bắt Đầu Auto Apply</button>
+      <button id="indeed-stop-btn" style="background-color: #ef4444; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-left: 5px;">Dừng Bot</button>
+      <label style="margin-left: 10px; color: white;">
+        Số lượt cuộn tìm Job:
+        <input type="number" id="max-pages-input" value="${maxPages}" min="1" style="width: 50px; color: black; text-align: center;"/>
       </label>
     </div>
-    <div id="indeed-crawler-status">Sẵn sàng quét Simplify.jobs</div>
-    <div id="indeed-crawler-table-wrapper">
-      <table id="indeed-crawler-table">
+    <div id="indeed-crawler-status" style="margin-top: 5px; color: #60a5fa;">Sẵn sàng chạy kịch bản ứng tuyển.</div>
+    <div id="indeed-crawler-table-wrapper" style="max-height: 180px; overflow-y: auto; margin-top: 5px;">
+      <table id="indeed-crawler-table" style="width: 100%; font-size: 12px; table-layout: fixed;">
         <thead>
-          <tr>
-            <th>Company</th><th>Job Title</th><th>Link</th><th>Salary</th><th>Posted Date</th><th>Location</th><th>Scroll</th><th>Keyword</th>
+          <tr style="text-align: left;">
+            <th style="width:28%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Công ty</th>
+            <th style="width:42%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Vị trí</th>
+            <th style="width:30%;">Trạng thái</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
+    <div id="sac-ai-settings">
+      <div id="sac-ai-toggle">⚙️ Cài đặt AI <span id="sac-ai-chevron">▼</span></div>
+      <div id="sac-ai-body">
+        <label>Provider:
+          <select id="sac-ai-provider">
+            <option value="openai">OpenAI GPT-4o-mini</option>
+            <option value="gemini">Google Gemini 2.0 Flash</option>
+          </select>
+        </label>
+        <label id="sac-key-label">API Key:
+          <input type="password" id="sac-ai-key" placeholder="sk-... hoặc AIza..."/>
+        </label>
+        <label id="sac-sheet-label" style="display:none;">Sheet URL (danh sách key Gemini):
+          <input type="text" id="sac-ai-sheet-url" placeholder="https://docs.google.com/spreadsheets/d/1wzgeUWKlXe-QU-rDZLaLjIQxeXreNvbm3Fi88UZjXWM/edit?usp=sharing" style="width:100%;font-size:10px;"/>
+          <span style="color:#94a3b8;font-size:10px;">Publish sheet → File → Share → Publish to web → CSV</span>
+        </label>
+        <label>Resume (paste plain text):
+          <textarea id="sac-ai-resume" rows="6" placeholder="Dán nội dung resume vào đây..."></textarea>
+        </label>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button id="sac-ai-save">💾 Lưu cài đặt</button>
+          <button id="sac-ai-parse">📋 Parse Resume</button>
+          <span id="sac-ai-save-status"></span>
+        </div>
+        <div id="sac-resume-data-status" style="font-size:10px;color:#94a3b8;margin-top:4px;"></div>
+      </div>
+    </div>
   `;
     document.body.appendChild(panel);
 
-    document.getElementById("indeed-start-btn").onclick = () => {
-        const currentSearch = new URLSearchParams(window.location.search).get("search") || "General";
-        currentKeyword = currentSearch;
-        startCrawl();
-    };
-
-    document.getElementById("indeed-stop-btn").onclick = async () => {
+    document.getElementById("indeed-start-btn").onclick = () => startAutoApplyLoop();
+    document.getElementById("indeed-stop-btn").onclick = () => {
         isCrawling = false;
         chrome.storage.local.set({ isCrawling: false });
-        updateStatus("Đã dừng và đang xử lý dữ liệu...");
-        exportCSV();
-        await sendToGoogleSheets(allJobs);
+        updateStatus("🛑 Đã gửi lệnh dừng bot.");
     };
 
-    document.getElementById("indeed-reset-btn").onclick = () => {
-        chrome.storage.local.clear();
-        allJobs = [];
-        existingKeys.clear();
-        isCrawling = false;
-        hasExported = false;
-        document.querySelector("#indeed-crawler-table tbody").innerHTML = "";
-        updateStatus("Đã xóa dữ liệu.");
-        document.getElementById("indeed-start-btn").disabled = false;
+    // --- AI Settings: load saved config ---
+    function updateProviderUI(provider) {
+        const isGemini = provider === 'gemini';
+        document.getElementById("sac-key-label").style.display   = isGemini ? 'none'  : 'block';
+        document.getElementById("sac-sheet-label").style.display  = isGemini ? 'block' : 'none';
+    }
+
+    chrome.storage.local.get('_sacAiConfig', ({ _sacAiConfig }) => {
+        if (_sacAiConfig) {
+            document.getElementById("sac-ai-provider").value       = _sacAiConfig.provider  || "openai";
+            document.getElementById("sac-ai-key").value            = _sacAiConfig.apiKey    || "";
+            document.getElementById("sac-ai-sheet-url").value      = _sacAiConfig.sheetUrl  || "";
+            document.getElementById("sac-ai-resume").value         = _sacAiConfig.resume    || "";
+            updateProviderUI(_sacAiConfig.provider || "openai");
+            if (_sacAiConfig.resumeData) {
+                document.getElementById("sac-resume-data-status").textContent =
+                    "✅ Resume đã parse: " + Object.keys(_sacAiConfig.resumeData).length + " fields";
+            }
+        }
+    });
+
+    document.getElementById("sac-ai-provider").onchange = (e) => updateProviderUI(e.target.value);
+
+    // Toggle collapse
+    document.getElementById("sac-ai-toggle").onclick = () => {
+        const body    = document.getElementById("sac-ai-body");
+        const chevron = document.getElementById("sac-ai-chevron");
+        const open    = body.style.display !== "none";
+        body.style.display    = open ? "none" : "block";
+        chevron.textContent   = open ? "▼" : "▲";
+    };
+
+    // Save config
+    document.getElementById("sac-ai-save").onclick = () => {
+        const provider = document.getElementById("sac-ai-provider").value;
+        const cfg = {
+            provider,
+            apiKey:   document.getElementById("sac-ai-key").value.trim(),
+            sheetUrl: document.getElementById("sac-ai-sheet-url").value.trim(),
+            resume:   document.getElementById("sac-ai-resume").value.trim()
+        };
+        // Xóa resumeData cũ khi resume text thay đổi
+        chrome.storage.local.set({ _sacAiConfig: cfg }, () => {
+            chrome.runtime.sendMessage({ action: 'resetKeyPool' });
+            document.getElementById("sac-resume-data-status").textContent = "⚠️ Resume thay đổi — nhấn Parse Resume lại";
+            const st = document.getElementById("sac-ai-save-status");
+            st.textContent = "✅ Đã lưu!";
+            setTimeout(() => { st.textContent = ""; }, 2000);
+        });
+    };
+
+    // Parse Resume → compact JSON
+    document.getElementById("sac-ai-parse").onclick = async () => {
+        const st = document.getElementById("sac-resume-data-status");
+        const stored = await chrome.storage.local.get('_sacAiConfig');
+        const cfg = stored._sacAiConfig;
+        if (!cfg?.resume) { st.textContent = "❌ Chưa có resume — lưu cài đặt trước."; return; }
+
+        st.textContent = "⏳ Đang parse resume...";
+        const prompt = `Extract key info from this resume into compact JSON. Return ONLY valid JSON, no explanation:
+{
+  "name": "",
+  "email": "",
+  "phone": "",
+  "location": "",
+  "work_auth_us": true,
+  "visa_sponsorship": false,
+  "experience_years": 0,
+  "current_role": "",
+  "skills": [],
+  "education": "",
+  "linkedin": "",
+  "languages": [],
+  "summary": ""
+}
+
+Resume:
+${cfg.resume}`;
+
+        chrome.runtime.sendMessage(
+            { action: 'callAI', provider: cfg.provider, apiKey: cfg.apiKey, sheetUrl: cfg.sheetUrl, resume: '', question: prompt, rawPrompt: true },
+            res => {
+                if (!res?.success || !res.answer) {
+                    st.textContent = "❌ Parse thất bại: " + (res?.error || 'no response');
+                    return;
+                }
+                try {
+                    const cleaned = res.answer.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+                    const match = cleaned.match(/\{[\s\S]*\}/);
+                    const resumeData = JSON.parse(match?.[0] || cleaned);
+                    chrome.storage.local.set({ _sacAiConfig: { ...cfg, resumeData } }, () => {
+                        const keys = Object.keys(resumeData).length;
+                        st.textContent = `✅ Đã parse: ${keys} fields — ${JSON.stringify(resumeData).length} chars`;
+                    });
+                } catch (e) {
+                    st.textContent = "❌ Không parse được JSON: " + res.answer.slice(0, 100);
+                }
+            }
+        );
     };
 }
 
 function updateStatus(text) {
-    document.getElementById("indeed-crawler-status").textContent = text;
+    const el = document.getElementById("indeed-crawler-status");
+    if (el) el.textContent = text;
     log(text);
 }
 
-function appendToTable(job) {
+function appendToTable(company, title, status, success = true) {
     const tbody = document.querySelector("#indeed-crawler-table tbody");
+    if (!tbody) return;
     const row = document.createElement("tr");
     row.innerHTML = `
-    <td>${job.company}</td>
-    <td>${job.title}</td>
-    <td><a href="${job.link}" target="_blank">Link</a></td>
-    <td>${job.salary}</td>
-    <td>${job.postedDate}
-    <td>${job.location}</td>
-    <td>${job.page}</td>
-    <td>${job.keyword}</td>
+    <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${company}">${company}</td>
+    <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${title}">${title}</td>
+    <td style="color:${success ? '#22c55e' : '#f87171'};font-weight:bold;">${status}</td>
   `;
     tbody.appendChild(row);
     tbody.scrollTop = tbody.scrollHeight;
 }
 
-// --- CRAWL LOGIC CHO SIMPLIFY (INFINITE SCROLL) ---
-async function startCrawl() {
-    if (isCrawling) return;
+// =============================================================
+// AI FORM FILL — điền các field mà Simplify bỏ sót bằng AI
+// =============================================================
 
-    const inputVal = document.getElementById("max-pages-input").value;
-    maxPages = parseInt(inputVal) || 1;
-
-    isCrawling = true;
-    chrome.storage.local.set({ isCrawling, maxPages });
-    document.getElementById("indeed-start-btn").disabled = true;
-    updateStatus("Bắt đầu cuộn trang và quét dữ liệu...");
-    await crawlLoop();
+function setReactFieldValue(el, value) {
+    const proto = el.tagName === 'TEXTAREA'
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, value);
+    else el.value = value;
+    el.dispatchEvent(new InputEvent('input',  { bubbles: true, data: value, inputType: 'insertText' }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur',   { bubbles: true }));
 }
 
+function extractFieldLabel(el) {
+    if (el.id) {
+        const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (lbl) return lbl.innerText.replace(/\*/g, '').trim();
+    }
+    const ariaLbl = el.getAttribute('aria-label');
+    if (ariaLbl) return ariaLbl.trim();
+    const ariaRef = el.getAttribute('aria-labelledby');
+    if (ariaRef) {
+        const ref = document.getElementById(ariaRef);
+        if (ref) return ref.innerText.trim();
+    }
+    if (el.placeholder) return el.placeholder.trim();
+    let node = el.parentElement;
+    for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+        const lbl = node.querySelector('label');
+        if (lbl && !lbl.contains(el)) return lbl.innerText.replace(/\*/g, '').trim();
+        const legend = node.querySelector('legend');
+        if (legend) return legend.innerText.trim();
+    }
+    return el.name || el.id || 'this field';
+}
+
+function extractLabelAbove(container) {
+    const aria = container.getAttribute('aria-label');
+    if (aria?.trim()) return aria.trim();
+    const ariaRef = container.getAttribute('aria-labelledby');
+    if (ariaRef) { const r = document.getElementById(ariaRef); if (r) return r.innerText.trim(); }
+    const legend = container.closest('fieldset')?.querySelector('legend');
+    if (legend) return legend.innerText.replace(/\*/g, '').trim();
+    let node = container;
+    for (let i = 0; i < 5 && node; i++, node = node.parentElement) {
+        let prev = node.previousElementSibling;
+        while (prev) {
+            if (prev.offsetParent !== null) {
+                const txt = prev.innerText?.replace(/\*/g, '').trim();
+                if (txt && txt.length >= 3 && txt.length <= 500) return txt;
+            }
+            prev = prev.previousElementSibling;
+        }
+    }
+    return null;
+}
+
+function getEmptyTextFields() {
+    const sel = [
+        'input[type="text"]', 'input[type="email"]', 'input[type="url"]',
+        'input[type="tel"]',  'input[type="number"]', 'textarea'
+    ].join(',');
+    return [...document.querySelectorAll(sel)].filter(el =>
+        el.offsetParent !== null && !el.disabled && !el.readOnly &&
+        (el.value || '').trim() === ''
+    );
+}
+
+function getEmptySelectFields() {
+    return [...document.querySelectorAll('select')].filter(el => {
+        if (el.offsetParent === null || el.disabled) return false;
+        if (!el.value) return true;
+        const selected = el.options[el.selectedIndex];
+        if (!selected?.value) return true;
+        const firstText = (el.options[0]?.text || '').toLowerCase();
+        return /select|choose|--|please|none|\s*/.test(firstText) && el.selectedIndex === 0;
+    });
+}
+
+function getUncheckedCheckboxGroups() {
+    const seen = new Set();
+    const groups = [];
+    [...document.querySelectorAll('input[type="checkbox"]')]
+        .filter(cb => cb.offsetParent !== null && !cb.disabled)
+        .forEach(cb => {
+            let container = cb.closest('fieldset') || cb.closest('[role="group"]');
+            if (!container) {
+                let node = cb.parentElement;
+                for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+                    if (node.querySelectorAll('input[type="checkbox"]').length > 1) { container = node; break; }
+                }
+            }
+            if (!container || seen.has(container)) return;
+            const cbs = [...container.querySelectorAll('input[type="checkbox"]')]
+                .filter(c => c.offsetParent !== null && !c.disabled);
+            if (cbs.some(c => c.checked)) return;
+            seen.add(container);
+            groups.push({ container, checkboxes: cbs });
+        });
+    return groups;
+}
+
+function getUncheckedRadioGroups() {
+    const seen = new Set();
+    const groups = [];
+    [...document.querySelectorAll('input[type="radio"]')]
+        .filter(r => r.offsetParent !== null && !r.disabled)
+        .forEach(r => {
+            const key = r.name || r.parentElement;
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            const siblings = r.name
+                ? [...document.querySelectorAll(`input[type="radio"][name="${CSS.escape(r.name)}"]`)]
+                    .filter(x => x.offsetParent !== null && !x.disabled)
+                : [r];
+            if (siblings.some(x => x.checked)) return;
+            groups.push({ key, radios: siblings });
+        });
+    return groups;
+}
+
+function getButtonToggleGroups() {
+    const seen = new Set();
+    const groups = [];
+    const parentMap = new Map();
+    for (const btn of document.querySelectorAll('button')) {
+        if (btn.offsetParent === null || btn.disabled) continue;
+        const txt = (btn.textContent || '').trim();
+        if (!txt || txt.length > 50) continue;
+        const lower = txt.toLowerCase();
+        if (/^(submit|apply|next|back|cancel|save|continue|upload|browse|sign|log|autofill|fill|add|remove)/.test(lower)) continue;
+        const parent = btn.parentElement;
+        if (!parent) continue;
+        if (!parentMap.has(parent)) parentMap.set(parent, []);
+        parentMap.get(parent).push(btn);
+    }
+    for (const [parent, buttons] of parentMap) {
+        if (buttons.length < 2 || buttons.length > 6) continue;
+        if (seen.has(parent)) continue;
+        const anyActive = buttons.some(b =>
+            b.getAttribute('aria-pressed') === 'true' ||
+            b.getAttribute('aria-selected') === 'true' ||
+            b.classList.contains('active') || b.classList.contains('selected')
+        );
+        if (anyActive) continue;
+        const label = extractLabelAbove(parent);
+        if (!label || label.length < 3) continue;
+        seen.add(parent);
+        groups.push({ container: parent, buttons, label });
+    }
+    return groups;
+}
+
+function fieldKey(el) {
+    return el.id || el.name || (el.getAttribute('aria-label') || '') + el.placeholder;
+}
+
+function waitForDomSettle(timeoutMs = 8000, settleMs = 1200) {
+    return new Promise(resolve => {
+        let lastChange = Date.now();
+        const startTime = Date.now();
+        const observer = new MutationObserver(() => { lastChange = Date.now(); });
+        observer.observe(document.body, {
+            subtree: true, childList: true,
+            attributes: true, attributeFilter: ['value', 'class', 'disabled'],
+        });
+        const timer = setInterval(() => {
+            const now = Date.now();
+            if (now - lastChange >= settleMs || now - startTime >= timeoutMs) {
+                clearInterval(timer);
+                observer.disconnect();
+                resolve();
+            }
+        }, 200);
+    });
+}
+
+function callAI(question, cfg, retries = 2) {
+    return new Promise(resolve => {
+        function attempt(n) {
+            chrome.runtime.sendMessage(
+                { action: 'callAI', provider: cfg.provider, apiKey: cfg.apiKey, sheetUrl: cfg.sheetUrl, resume: cfg.resume, question },
+                res => {
+                    if (chrome.runtime.lastError) {
+                        if (n > 0) { setTimeout(() => attempt(n - 1), 600); return; }
+                        resolve(null); return;
+                    }
+                    if (!res?.success) {
+                        const retryMs = res?.retryAfterMs || 0;
+                        if (n > 0 && retryMs > 0 && retryMs <= 60000) {
+                            setTimeout(() => attempt(n - 1), retryMs + 200);
+                        } else { resolve(null); }
+                        return;
+                    }
+                    resolve(res.answer || null);
+                }
+            );
+        }
+        attempt(retries);
+    });
+}
+
+async function aiHandleSelect(el, cfg) {
+    const label = extractFieldLabel(el);
+    const options = [...el.options]
+        .filter(o => o.value && !o.text.toLowerCase().match(/^(select|choose|--|please)/))
+        .map((o, i) => ({ i, text: o.text.trim(), value: o.value }));
+    if (!options.length) return;
+    const prompt = `Question: "${label}"\nChoose the best option (reply NUMBER only):\n` +
+        options.map(o => `${o.i + 1}. ${o.text}`).join('\n');
+    const answer = await callAI(prompt, cfg);
+    if (!answer) return;
+    const num = parseInt(answer.trim());
+    const chosen = (!isNaN(num) && options[num - 1])
+        ? options[num - 1]
+        : options.find(o => answer.toLowerCase().includes(o.text.toLowerCase()));
+    if (chosen) {
+        el.value = chosen.value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        log(`✅ [select] "${label}" → "${chosen.text}"`);
+    }
+}
+
+async function aiHandleCheckboxGroup({ container, checkboxes }, cfg) {
+    const label = extractLabelAbove(container) || extractFieldLabel(container);
+    if (!label || label.length < 2 || label.length > 300) return;
+    const options = checkboxes.map((cb, i) => {
+        const lbl = cb.id ? document.querySelector(`label[for="${CSS.escape(cb.id)}"]`) : null;
+        const text = lbl?.innerText.trim() || cb.closest('label')?.innerText.trim() || cb.value || `Option ${i + 1}`;
+        return { i, text, el: cb };
+    });
+    const prompt = `Question: "${label}"\nCheck appropriate option(s) (reply NUMBER only, comma-separated if multiple):\n` +
+        options.map(o => `${o.i + 1}. ${o.text}`).join('\n');
+    const answer = await callAI(prompt, cfg);
+    if (!answer) return;
+    const nums = answer.match(/\d+/g)?.map(Number) ?? [];
+    for (const num of nums) {
+        const opt = options[num - 1];
+        if (opt && !opt.el.checked) { opt.el.click(); log(`✅ [checkbox] "${label}" → "${opt.text}"`); }
+    }
+}
+
+async function aiHandleRadioGroup({ radios }, cfg) {
+    const container = radios[0].closest('[role="radiogroup"]') || radios[0].closest('fieldset') || radios[0].parentElement;
+    const label = extractLabelAbove(container) || extractFieldLabel(radios[0]);
+    if (!label || label.length < 2 || label.length > 400) return;
+    const options = radios.map((r, i) => {
+        const text = (r.id ? document.querySelector(`label[for="${CSS.escape(r.id)}"]`)?.innerText.replace(/\*/g, '').trim() : null)
+            || r.closest('label')?.innerText.trim() || r.value || `Option ${i + 1}`;
+        return { i, text, el: r };
+    });
+    const prompt = `Question: "${label}"\nSelect one option (reply NUMBER only):\n` +
+        options.map(o => `${o.i + 1}. ${o.text}`).join('\n');
+    const answer = await callAI(prompt, cfg);
+    if (!answer) return;
+    const num = parseInt(answer.trim());
+    const chosen = (!isNaN(num) && options[num - 1])
+        ? options[num - 1]
+        : options.find(o => answer.toLowerCase().includes(o.text.toLowerCase()));
+    if (chosen) { chosen.el.click(); log(`✅ [radio] "${label}" → "${chosen.text}"`); }
+}
+
+async function aiHandleButtonToggleGroup({ buttons, label }, cfg) {
+    if (!label || label.length < 2 || label.length > 400) return;
+    const options = buttons.map((b, i) => ({ i, text: b.textContent.trim(), el: b }));
+    const prompt = `Question: "${label}"\nClick the best option (reply NUMBER only):\n` +
+        options.map(o => `${o.i + 1}. ${o.text}`).join('\n');
+    const answer = await callAI(prompt, cfg);
+    if (!answer) return;
+    const num = parseInt(answer.trim());
+    const chosen = (!isNaN(num) && options[num - 1])
+        ? options[num - 1]
+        : options.find(o => answer.toLowerCase().includes(o.text.toLowerCase()));
+    if (chosen) { chosen.el.scrollIntoView({ block: 'center' }); chosen.el.click(); log(`✅ [toggle] "${label}" → "${chosen.text}"`); }
+}
+
+async function scanAndFillEmptyFields() {
+    const stored = await chrome.storage.local.get('_sacAiConfig');
+    const cfg = stored._sacAiConfig;
+    const needsKey = cfg?.provider === 'openai' || (cfg?.provider === 'gemini' && !cfg?.sheetUrl);
+    if ((needsKey && !cfg?.apiKey) || !cfg?.resume || !cfg?.provider) {
+        log("ℹ️ AI fill: chưa cấu hình — bỏ qua.");
+        return;
+    }
+
+    const attempted = new Set();
+
+    for (let round = 0; round < 5; round++) {
+        const found = {
+            text:     getEmptyTextFields().filter(f => !attempted.has(fieldKey(f))),
+            select:   getEmptySelectFields(),
+            checkbox: getUncheckedCheckboxGroups(),
+            radio:    getUncheckedRadioGroups(),
+            toggle:   getButtonToggleGroups(),
+        };
+        const total = Object.values(found).reduce((s, a) => s + a.length, 0);
+        if (total === 0) { log("✅ AI fill: không còn field trống."); break; }
+
+        log(`🤖 AI fill round ${round + 1}: ${total} field(s)`);
+        updateStatus(`🤖 AI đang điền ${total} trường còn trống...`);
+
+        for (const f of found.text) {
+            let q = extractFieldLabel(f);
+            if (!q || q.length < 2) continue;
+            if (q.length > 300) q = q.slice(0, 300);
+            attempted.add(fieldKey(f));
+            const ans = await callAI(q, cfg);
+            if (ans) { f.scrollIntoView({ block: 'center' }); setReactFieldValue(f, ans); log(`✅ [text] "${q}" → "${ans.slice(0, 80)}"`); }
+            await wait(300);
+        }
+        for (const f of found.select) { await aiHandleSelect(f, cfg); await wait(300); }
+        for (const g of found.checkbox) { await aiHandleCheckboxGroup(g, cfg); await wait(300); }
+        for (const g of found.radio) { await aiHandleRadioGroup(g, cfg); await wait(300); }
+        for (const g of found.toggle) { await aiHandleButtonToggleGroup(g, cfg); await wait(400); }
+
+        await waitForDomSettle(5000, 800);
+    }
+    updateStatus("✅ AI đã điền xong các trường còn trống.");
+}
+
+// --- SHADOW DOM HELPERS (Simplify Extension) ---
+// Extension Simplify nhúng UI vào Shadow Root của div.simplify-jobs-shadow-root
+// Phải truy cập qua host.shadowRoot — document.getElementById() không xuyên được shadow boundary
+
+function getSimplifyRoot() {
+    const ls = document.getElementsByClassName("simplify-jobs-shadow-root");
+
+    // DEBUG: kiểm tra host element có tồn tại không
+    log(`🔍 shadowRoot check: tìm thấy ${ls ? ls.length : 0} host element(s) với class "simplify-jobs-shadow-root"`);
+
+    if (!ls || ls.length === 0) {
+        log("❌ shadowRoot: KHÔNG tìm thấy host nào — Simplify chưa inject hoặc sai class");
+        return null;
+    }
+
+    // Chỉ lấy phần tử [0] từ HTMLCollection trả về
+    const host = ls[0];
+    log(`🔍 shadowRoot: ls[0] = <${host.tagName.toLowerCase()}> id="${host.id}" class="${host.className.slice(0, 60)}"`);
+
+    if (!host.shadowRoot) {
+        log("❌ shadowRoot: ls[0].shadowRoot = null (closed mode hoặc chưa attach)");
+        return null;
+    }
+
+    log(`✅ shadowRoot: OK — ${host.shadowRoot.children.length} children bên trong`);
+    return host.shadowRoot;
+}
+
+function querySimplify(selector) {
+    const root = getSimplifyRoot();
+    return root ? root.querySelector(selector) : null;
+}
+
+// Tìm #fill-button bằng cách quét TẤT CẢ host elements (không chỉ ls[0])
+// Vì Simplify inject nhiều shadow root — fill-button có thể ở host bất kỳ
+function findAutofillButton() {
+    const hosts = document.getElementsByClassName("simplify-jobs-shadow-root");
+    if (!hosts || hosts.length === 0) {
+        log("❌ Không tìm thấy host element nào.");
+        return null;
+    }
+
+    log(`🔍 Quét ${hosts.length} host elements tìm #fill-button...`);
+
+    for (let i = 0; i < hosts.length; i++) {
+        const root = hosts[i].shadowRoot;
+        if (!root) continue;
+
+        // Ưu tiên #fill-button (confirmed ID)
+        const byId = root.querySelector('#fill-button');
+        if (byId) {
+            log(`✅ Tìm thấy #fill-button tại host[${i}]`);
+            return byId;
+        }
+
+        // Fallback: tìm theo text chính xác
+        const match = [...root.querySelectorAll('button, [role="button"]')].find(el => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return t === 'autofill this page' || t === 'autofill';
+        });
+        if (match) {
+            log(`✅ Tìm thấy autofill button bằng text tại host[${i}]`);
+            return match;
+        }
+    }
+
+    // Debug: log tất cả buttons tìm thấy trong mọi host
+    for (let i = 0; i < hosts.length; i++) {
+        const root = hosts[i].shadowRoot;
+        if (!root) continue;
+        const btns = [...root.querySelectorAll('button')];
+        if (btns.length) {
+            log(`🔎 host[${i}] buttons: ${btns.map(b => `#${b.id || '?'} "${b.textContent.trim().slice(0, 30)}"`).join(' | ')}`);
+        }
+    }
+
+    return null;
+}
+
+// Poll #fill-button với timeout (render async sau khi tab/page load)
+async function waitForAutofillButton(timeoutMs = 12000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const btn = findAutofillButton();
+        if (btn) {
+            log("✅ Tìm thấy #fill-button.");
+            return btn;
+        }
+        await wait(400);
+    }
+    log("⏱️ Timeout: không tìm thấy #fill-button sau " + timeoutMs + "ms");
+    return null;
+}
+
+// --- CONTAINER SCROLL LOGIC ---
 function getJobListContainer() {
     return [...document.querySelectorAll('div')].find(el =>
         el.classList.contains('overflow-y-auto') &&
@@ -149,259 +659,292 @@ async function wheelScroll(container, times = 22) {
     }
 }
 
-async function crawlLoop() {
+// --- LẤY STABLE ID CHO CARD (tránh dùng title/company text dễ thay đổi) ---
+function getCardJobId(card) {
+    // Ưu tiên: link href → data attribute → fallback title+company
+    const link = card.querySelector('a[href*="/jobs/"], a[href*="job"]');
+    if (link && link.href) {
+        try {
+            return new URL(link.href).pathname; // vd: /jobs/abc123
+        } catch {}
+    }
+    // Thử data-id / data-job-id attribute
+    const dataId = card.getAttribute('data-id') || card.getAttribute('data-job-id') || card.getAttribute('id');
+    if (dataId) return dataId;
+
+    // Fallback: title + company text (kém ổn định hơn nhưng vẫn dùng)
+    const titleEl = card.querySelector('h3') || card.querySelector('h2') || card.querySelector('h4');
+    const companyEl = card.querySelector('span.text-left') || card.querySelector('div.text-secondary-300 span');
+    const title = titleEl ? titleEl.innerText.trim() : '';
+    const company = companyEl ? companyEl.innerText.trim() : '';
+    return title || company ? `${title}__${company}` : null;
+}
+
+// Kiểm tra extension context còn hợp lệ không
+// (bị invalidate khi extension reload mà tab chưa refresh)
+function isChromeContextValid() {
+    try { return !!chrome.runtime?.id; } catch { return false; }
+}
+
+// Nhận thông báo hết key từ background.js → dừng tool
+chrome.runtime.onMessage.addListener((request) => {
+    if (request.action !== 'allKeysExhausted') return;
+    isCrawling = false;
+    chrome.storage.local.set({ isCrawling: false });
+    updateStatus('⛔ Tất cả Gemini key đã hết quota hôm nay — tool đã dừng.');
+    const st = document.getElementById("sac-resume-data-status");
+    if (st) st.textContent = '⛔ Hết quota — thêm key mới vào Sheet hoặc chờ ngày mai.';
+});
+
+// --- CORE WORKFLOW LOOP ---
+async function startAutoApplyLoop() {
+    if (isCrawling) return;
+
+    if (!isChromeContextValid()) {
+        alert('⚠️ Extension vừa được reload.\nHãy refresh trang này (Cmd+R) rồi thử lại.');
+        return;
+    }
+
+    const inputVal = document.getElementById("max-pages-input").value;
+    maxPages = parseInt(inputVal) || 1;
+
+    isCrawling = true;
+    chrome.storage.local.set({ isCrawling, maxPages });
+    document.getElementById("indeed-start-btn").disabled = true;
+
     let currentScroll = 0;
     let lastHeight = 0;
 
-    while (isCrawling && currentScroll < maxPages) {
-        updateStatus(`Đang quét dữ liệu lần cuộn thứ ${currentScroll + 1}...`);
+    updateStatus("⏳ Đang đợi danh sách Job hiển thị ổn định...");
+    let retries = 0;
+    while (!document.querySelector('div.group.mx-auto.flex.size-full.flex-col') && retries < 10) {
+        await wait(1000);
+        retries++;
+    }
 
-        await scrapeCurrentJobs(currentScroll + 1);
+    while (isCrawling && currentScroll < maxPages) {
+        updateStatus(`🔄 Quét job — đợt cuộn ${currentScroll + 1}/${maxPages}...`);
+        await clickAndProcessJobCards();
 
         const container = getJobListContainer();
         if (!container) {
-            log("Không tìm thấy job list container, dừng lại.");
+            log("Không tìm thấy container cuộn trang, dừng.");
             break;
         }
 
         await wheelScroll(container, 22);
-        await wait(4000); // Đợi Simplify gọi API và render card mới
+        await wait(3000);
 
         const newHeight = container.scrollHeight;
         if (newHeight === lastHeight) {
-            log("Đã chạm đáy — thử kích lại.");
-            container.scrollTop -= 300;
-            await wait(1000);
-            await wheelScroll(container, 22);
-            await wait(10000);
-            container.scrollTop = container.scrollHeight;
-            await wait(10000);
-            if (container.scrollHeight === lastHeight) break;
-            await scrapeCurrentJobs(currentScroll + 1); // Có job mới sau retry → quét lại
+            log("Đã duyệt hết danh sách công việc.");
+            break;
         }
-        lastHeight = container.scrollHeight;
+        lastHeight = newHeight;
         currentScroll++;
     }
-    finishCrawl("Hoàn thành quét dữ liệu.");
+
+    isCrawling = false;
+    document.getElementById("indeed-start-btn").disabled = false;
+    updateStatus("🎉 Đã hoàn thành toàn bộ danh sách ứng tuyển ngày hôm nay!");
 }
 
-async function getShareLink(urlBefore) {
-    // Ưu tiên 1: URL browser thay đổi sau khi click card (SPA navigation)
-    if (window.location.href !== urlBefore) {
-        return window.location.href;
-    }
-
-    // Ưu tiên 2: Click nút share và đọc clipboard
-    const shareBtn =
-        document.querySelector('button[aria-label*="share" i]') ||
-        document.querySelector('button[aria-label*="copy link" i]') ||
-        document.querySelector('button[title*="share" i]') ||
-        document.querySelector('[data-testid*="share"]');
-
-    if (shareBtn) {
-        shareBtn.click();
-        await wait(600);
-        try {
-            const clipText = await navigator.clipboard.readText();
-            if (clipText && clipText.startsWith('http')) return clipText.trim();
-        } catch (e) {
-            log("Không đọc được clipboard:", e.message);
-        }
-    }
-
-    return window.location.href;
-}
-
-    /**
-     * Hàm tìm ngày đăng dựa trên class cụ thể đã xác định
-     * @param {Element} card - Thẻ job card hiện tại
-     * @returns {string} - Ngày đăng hoặc "N/A"
-     */
-    async function getPostedDate() {
-    const detailPanel = document.querySelector('div.flex.flex-col.gap-4.lg\\:w-1\\/2.xl\\:w-2\\/5');
-    if (!detailPanel) return "N/A";
-
-    // 1. Tìm phần tử trigger (thẻ span chứa chữ "Confirmed live...")
-    const triggerSpan = detailPanel.querySelector('span.cursor-help');
-
-    if (triggerSpan) {
-        // 2. Mô phỏng di chuột vào để kích hoạt tooltip
-        triggerSpan.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-        triggerSpan.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-
-        // 3. Đợi một chút để Radix UI đổi data-state và hiển thị tooltip
-        await wait(600); 
-
-        // 4. Tìm Tooltip Content - Thường Radix sẽ render ở cuối body hoặc gần đó
-        // Chúng ta tìm theo nội dung "Posted on" như trong hình bạn gửi
-        const portalNodes = document.querySelectorAll('[role="tooltip"], [data-side]');
-        for (let node of portalNodes) {
-            if (node.innerText.includes("Posted on")) {
-                const dateMatch = node.innerText.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
-                const result = dateMatch ? dateMatch[0] : "N/A";
-                
-                // Di chuột ra để dọn dẹp trạng thái UI (optional)
-                triggerSpan.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-                
-                return result;
-            }
-        }
-    }
-
-    // Trường hợp dự phòng: Nếu ngày hiện sẵn không cần hover
-    const pEl = detailPanel.querySelector('div.pb-2 p.mt-1.text-left.text-sm.text-gray-500');
-    if (pEl && pEl.innerText.trim() !== "") {
-        const dateMatch = pEl.innerText.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
-        if (dateMatch) return dateMatch[0];
-    }
-
-    return "N/A";
-}
-
-    function forceOpenDateTooltip() {
-    // Tìm phần tử trigger có chứa data-state trong detail panel
-    const element = document.querySelector('div[aria-describedby*="radix"]');
-        if (element && element.getAttribute('data-state') === 'closed') {
-            element.setAttribute('data-state', 'open');
-            
-            // Dùng MutationObserver để giữ trạng thái luôn mở trong lúc cào
-            const observer = new MutationObserver(() => {
-                if (element.getAttribute('data-state') == 'closed') {
-                    element.setAttribute('data-state', 'delayed-open');
-                }
-            });
-            observer.observe(element, { attributes: true });
-            return observer;
-        }
-        return null;
-    }
-
-async function scrapeCurrentJobs(scrollNumber) {
-    if (scrollNumber === 1) await wait(800); // Đợi DOM ổn định ở lần đầu
-
+// --- XỬ LÝ CLICK CARD ---
+async function clickAndProcessJobCards() {
     const jobCards = document.querySelectorAll('div.group.mx-auto.flex.size-full.flex-col');
-    const keyword = document.title.split('|')[0].trim();
-
     for (let card of jobCards) {
         if (!isCrawling) break;
 
+        // --- CHỐNG CLICK LOOP (2 lớp) ---
+        // Lớp 1: data attribute (nhanh, bị mất khi React re-render)
+        if (card.dataset.autoApplied === 'true') continue;
+
+        // Lớp 2: stable ID + sessionStorage (persist qua re-render và page navigation SPA)
+        const jobId = getCardJobId(card);
+        if (jobId && isProcessed(jobId)) {
+            card.dataset.autoApplied = 'true'; // sync lại attribute
+            continue;
+        }
+
+        // Đánh dấu TRƯỚC KHI click để tránh loop nếu event handler kích hoạt lại
+        card.dataset.autoApplied = 'true';
+        if (jobId) markProcessed(jobId);
+
         try {
-            // Thử nhiều selector để xử lý cả trạng thái active/inactive của card
             const titleEl = card.querySelector('h3') || card.querySelector('h2') || card.querySelector('h4');
-            const companyEl = card.querySelector('span.text-left') ||
-                              card.querySelector('[class*="company"]') ||
-                              card.querySelector('div.text-secondary-300 span');
+            const companyEl = card.querySelector('span.text-left') || card.querySelector('span[class*="text-left"]') || card.querySelector('div.text-secondary-300 span');
+            const jobTitle = titleEl ? titleEl.innerText.trim() : "Unknown Title";
+            const jobCompany = companyEl ? companyEl.innerText.trim() : "Unknown Company";
 
-            const jobTitle = titleEl ? titleEl.innerText.trim() : "N/A";
-            const jobCompany = companyEl ? companyEl.innerText.trim() : "N/A";
-            
-            await wait(2000)
-            
-
-            // Bỏ qua nếu cả hai đều N/A (element không phải job card thực sự)
-            if (jobTitle === "N/A" && jobCompany === "N/A") continue;
-
-            const jobKey = `${jobTitle}-${jobCompany}`;
-
-            if (existingKeys.has(jobKey)) continue;
-
-            // Xử lý Lương và Địa điểm từ các badge
-            let salary = "N/A";
-            let location = "N/A";
-            const badges = card.querySelectorAll('div.bg-gray-50');
-            badges.forEach(badge => {
-                const text = badge.innerText.trim();
-                if (text.includes('$')) salary = text;
-                else if (badge.querySelector('p.text-left')) location = text;
-            });
-
-            // Click card để mở detail panel bên phải
-            const urlBefore = window.location.href;
-            
+            log(`👉 Đang chọn Card: ${jobTitle} - ${jobCompany} (ID: ${jobId})`);
+            card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            await wait(300); // chờ scroll settle trước khi click
             card.click();
-            await wait(2000); // Đợi detail panel load
+            await wait(2500); // chờ detail panel render
 
-            // --- LOGIC MỚI CHO NGÀY BỊ GIẤU ---
-            // 1. Ép trạng thái Tooltip sang 'open' bằng MutationObserver
-            const observer = forceOpenDateTooltip();
-            
-            // 2. Đợi một chút để Portal/Tooltip kịp render nội dung vào DOM
-            await wait(1000); 
+            // Tìm nút Apply trong detail panel bên phải
+            // Dùng selector linh hoạt thay vì exact class match
+            const applyButton =
+                document.querySelector('button.bg-primary-400:has(span)')        ||
+                document.querySelector('a.bg-primary-400')                        ||
+                [...document.querySelectorAll('button, a')].find(el => {
+                    const txt = (el.textContent || '').trim().toLowerCase();
+                    return (txt === 'apply' || txt === 'apply now') &&
+                           el.offsetParent !== null;
+                });
 
-            // 3. Lấy ngày đăng (Hàm getPostedDate lúc này sẽ tìm thấy data-state="open")
-            const postedDate = await getPostedDate();
+            if (applyButton) {
+                log("🎯 Tìm thấy nút Apply. Đang click...");
+                applyButton.click();
 
-            // 4. Dọn dẹp: Ngắt observer để trả lại trạng thái tự nhiên cho UI
-            if (observer) observer.disconnect();
-            
-            const jobLink = await getShareLink(urlBefore);
+                updateStatus(`⏳ Chờ Simplify Extension render autofill popup...`);
 
-            const job = {
-                key: jobKey,
-                title: jobTitle,
-                company: jobCompany,
-                location,
-                salary,
-                postedDate: postedDate,
-                link: jobLink,
-                page: scrollNumber,
-                keyword
-            };
+                // Chờ + click nút "Autofill this page" trong Shadow DOM của Simplify extension
+                await handleSimplifyAutofill(jobCompany, jobTitle);
+            } else {
+                log("⚠️ Không tìm thấy nút Apply — bỏ qua job này.");
+                appendToTable(jobCompany, jobTitle, "Bỏ qua (không có Apply)", false);
+            }
 
-            allJobs.push(job);
-            existingKeys.add(jobKey);
-            appendToTable(job);
-            chrome.storage.local.set({ allJobs });
+            await randomDelay(1500, 3000);
 
-            await randomDelay(1000, 1500);
-        } catch (e) {
-            console.error("Lỗi thẻ job:", e);
+        } catch (err) {
+            console.error("Lỗi khi xử lý Card:", err);
         }
     }
 }
 
-async function finishCrawl(reason) {
-    updateStatus(`${reason} Đang xuất file...`);
-    if (!hasExported) {
-        exportCSV();
-        hasExported = true;
+// --- SEMAPHORE: dùng chrome.storage để đồng bộ listing tab ↔ form tab ---
+// Giải quyết n+1 tab: listing tab chờ form tab xong mới tiếp tục card tiếp theo
+
+// setFormBusy trả về lockTs — timestamp chính xác do MÌNH set
+// (không đọc lại từ storage để tránh đọc nhầm timestamp cũ từ lần chạy trước)
+async function setFormBusy() {
+    const lockTs = Date.now();
+    await chrome.storage.local.set({ _sacFormBusy: true, _sacFormTs: lockTs });
+    return lockTs;
+}
+
+// clearFormBusy reset cả timestamp về 0 — tránh timestamp cũ gây stale detection sai
+async function clearFormBusy() {
+    await chrome.storage.local.set({ _sacFormBusy: false, _sacFormTs: 0 });
+}
+
+// lockTs: timestamp do setFormBusy() trả về — dùng để detect stale chính xác
+// (không dùng _sacFormTs từ storage vì có thể là giá trị cũ từ lần chạy trước)
+async function waitFormDone(timeoutMs = 120000, lockTs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        await wait(1000);
+        const { _sacFormBusy } = await chrome.storage.local.get('_sacFormBusy');
+
+        if (!_sacFormBusy) return true;
     }
+    // Hết timeout
+    await clearFormBusy();
+    return false;
+}
+
+// --- XỬ LÝ SIMPLIFY AUTOFILL (chạy trên listing tab sau khi click Apply) ---
+async function handleSimplifyAutofill(jobCompany, jobTitle) {
     try {
-        await sendToGoogleSheets(allJobs);
-        updateStatus(`Xong! Đã lưu ${allJobs.length} jobs vào Sheets & CSV.`);
+        // setFormBusy() trả về lockTs — dùng để detect stale chính xác
+        const lockTs = await setFormBusy();
+        await chrome.storage.local.set({ _sacCurrentJob: { company: jobCompany, title: jobTitle } });
+        await wait(2000);
+
+        const stillOnListing = document.querySelectorAll('div.group.mx-auto.flex.size-full.flex-col').length > 0;
+
+        if (stillOnListing) {
+            // Apply mở TAB MỚI → listing tab chờ form tab unlock
+            log("📌 Form tab đã mở — đang chờ form tab hoàn thành...");
+            updateStatus("⏳ Chờ form tab submit xong...");
+            appendToTable(jobCompany, jobTitle, "⏳ Đang xử lý...", true);
+
+            // Yêu cầu background.js track form tab vừa mở
+            // → khi tab đó đóng hoặc redirect sang external domain,
+            //   background.js tự clear _sacFormBusy (không cần chờ 90s nữa)
+            chrome.runtime.sendMessage({ action: "trackFormTab" }, (res) => {
+                if (res?.success) {
+                    log(`🔭 Background đang track form tab ID: ${res.tabId}`);
+                } else {
+                    log("⚠️ Không track được form tab — dùng stale fallback 30s.");
+                }
+            });
+
+            const done = await waitFormDone(120000, lockTs);
+            if (done) {
+                log("✅ Form tab đã xong — tiếp tục card tiếp theo.");
+                // Cập nhật dòng "⏳ Đang xử lý" → "✅ Đã nộp"
+                const rows = document.querySelectorAll("#indeed-crawler-table tbody tr");
+                const last = rows[rows.length - 1];
+                if (last) last.cells[2].textContent = "✅ Đã nộp";
+            } else {
+                log("⚠️ Timeout/crash chờ form tab.");
+                appendToTable(jobCompany, jobTitle, "⚠️ Form tab không phản hồi", false);
+            }
+            return;
+        }
+
+        // Apply mở CÙNG TAB (SPA) — form đang hiển thị trên tab này
+        updateStatus("⏳ Chờ #fill-button...");
+        const autofillBtn = await waitForAutofillButton(12000);
+
+        if (autofillBtn) {
+            log(`🔌 Click #fill-button: "${autofillBtn.textContent.trim()}"`);
+            autofillBtn.scrollIntoView({ block: 'center' });
+            await wait(300);
+            autofillBtn.click();
+            updateStatus("⏳ Đang autofill...");
+            await wait(6000);
+            // AI fill các field còn trống sau khi Simplify đã fill (SPA path)
+            await scanAndFillEmptyFields();
+        } else {
+            log("ℹ️ Không tìm thấy #fill-button.");
+        }
+
+        const submitButton = [...document.querySelectorAll('button, input[type="submit"], input[type="button"]')]
+            .find(btn => {
+                const txt = (btn.textContent || btn.value || "").toLowerCase().trim();
+                return txt.includes('submit') || txt.includes('nộp đơn') || txt.includes('hoàn tất');
+            });
+
+        if (submitButton && submitButton.offsetParent !== null) {
+            log(`🎉 Submit: "${(submitButton.textContent || submitButton.value).trim()}"`);
+            submitButton.scrollIntoView({ block: 'center' });
+            await wait(800);
+            submitButton.click();
+            await wait(3000);
+            appendToTable(jobCompany, jobTitle, "✅ Đã nộp", true);
+            await clearFormBusy();
+            log("🔙 Navigate back về listing...");
+            window.history.back();
+            await wait(3000);
+        } else {
+            log("⚠️ Không tìm thấy Submit.");
+            appendToTable(jobCompany, jobTitle, "⚠️ Chờ Submit thủ công", false);
+            await clearFormBusy();
+        }
+
     } catch (err) {
-        updateStatus("Lỗi gửi Sheets nhưng CSV đã tải.");
+        console.error("Lỗi handleSimplifyAutofill:", err);
+        appendToTable(jobCompany, jobTitle, "❌ Lỗi", false);
+        await clearFormBusy(); // luôn unlock dù lỗi
     }
-    isCrawling = false;
-    document.getElementById("indeed-start-btn").disabled = false;
-    chrome.storage.local.set({ isCrawling: false });
 }
 
-function exportCSV() {
-    const headers = ["Company", "Title", "Link", "Salary", "Posted_Date", "Location", "Scroll_Step"];
-    const rows = allJobs.map(j => 
-        [j.company, j.title, j.link, j.salary, j.postedDate, j.location, j.page].map(v => `"${(v||"").toString().replace(/"/g, '""')}"`).join(",")
-    );
-    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    chrome.runtime.sendMessage({ action: "saveToCSV", url, filename: `Simplify_Jobs_${allJobs.length}.csv` });
+// --- KHỞI TẠO ---
+// Panel chỉ hiển thị trên simplify.jobs (listing tab)
+// Trên form page (greenhouse, lever, workday...) chỉ chạy auto-fill logic
+if (window.location.hostname.includes('simplify.jobs')) {
+    createPanel();
 }
 
-// Khởi tạo
-createPanel();
-
-// Khôi phục dữ liệu cũ nếu có
-chrome.storage.local.get(["allJobs", "maxPages"], data => {
-    if (data.allJobs) {
-        allJobs = data.allJobs;
-        allJobs.forEach(j => {
-            existingKeys.add(j.key);
-            appendToTable(j);
-        });
+(async function init() {
+    await wait(3000);
+    const hasListingCards = document.querySelectorAll('div.group.mx-auto.flex.size-full.flex-col').length > 0;
+    if (hasListingCards) {
+        log("🗂️ Listing page xác nhận — panel đã sẵn sàng.");
     }
-    if (data.maxPages) {
-        maxPages = data.maxPages;
-        document.getElementById("max-pages-input").value = maxPages;
-    }
-});
+    // Form page autofill được xử lý bởi background.js executeScript (hoạt động trên mọi URL)
+})();

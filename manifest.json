@@ -1,24 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "Simplify Job Crawler",
+  "name": "Simplify Job Autofill",
   "version": "1.1",
   "description": "Tự động thu thập dữ liệu việc làm từ Simplify.",
   "permissions": ["scripting", "tabs", "downloads", "storage", "clipboardRead"],
   "action": {
-    "default_title": "Simplify Job Crawler",
+    "default_title": "Simplify Job Autofill",
     "default_icon": "icon.png"
   },
   "background": {
     "service_worker": "background.js"
   },
   "host_permissions": [
-    "https://*.Simplify.jobs/*"
+    "<all_urls>",
+    "https://api.openai.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["formAutofill.js"],
+      "matches": ["<all_urls>"]
+    }
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.Simplify.jobs/jobs*"],
+      "matches": ["https://*.simplify.jobs/jobs*"],
       "js": ["content.js"],
-      "css": ["styles.css"]
+      "css": ["styles.css"],
+      "run_at": "document_idle"
     }
   ]
 }
